@@ -212,3 +212,4 @@ npm run test:server
 ## 📄 License
 
 MIT License - see LICENSE file for details
+[![Verified on MseeP](https://mseep.ai/badge.svg)](https://mseep.ai/app/24d8d9b7-e817-4e80-aee0-b3c6d3127a71)
