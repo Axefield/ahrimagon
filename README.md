@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/axefield-ahrimagon-badge.png)](https://mseep.ai/app/axefield-ahrimagon)
+
 # MCP Mind Balance & Argumentation Service
 
 A Model Context Protocol (MCP) server providing tools for decision-making and argument analysis. Features an angel/demon advisory system for balanced decisions and argumentation tools for strengthening and analyzing arguments.
