@@ -1,0 +1,115 @@
+{
+  "version": "1.0.0",
+  "signature": "B9039306F0219E48B37D82AF4101DD387E04A5BFFB1A494EC717C0752000E025",
+  "timestamp": "2024-01-15T10:30:00.000Z",
+  "environment": "production",
+  "server": {
+    "name": "ahrimagon-mcp-scientific",
+    "version": "1.0.0",
+    "description": "Scientific-grade MCP Mind Balance & Argumentation Service",
+    "capabilities": {
+      "tools": {
+        "listChanged": false,
+        "maxConcurrent": 100
+      },
+      "resources": {
+        "maxMemory": 2048,
+        "maxCpu": 50.0
+      }
+    }
+  },
+  "mindBalance": {
+    "abstainThreshold": 0.70,
+    "tanClamp": 3.0,
+    "normalize": true,
+    "scoring": {
+      "rules": ["brier", "log", "quadratic"],
+      "abstentionScore": 0.0,
+      "calibration": {
+        "temperature": 1.0,
+        "method": "platt"
+      }
+    },
+    "validation": {
+      "maxIterations": 1000,
+      "convergenceThreshold": 1e-6,
+      "numericalPrecision": 64
+    }
+  },
+  "argumentation": {
+    "confidence": {
+      "premiseWeight": 0.5,
+      "objectionWeight": 0.3,
+      "riskPenalty": 0.3,
+      "uncertaintyModel": "bayesian"
+    },
+    "responses": {
+      "detailedRationale": true,
+      "includeEvidence": true,
+      "maxPremises": 20,
+      "maxObjections": 15
+    },
+    "validation": {
+      "logicalConsistency": true,
+      "evidenceVerification": true,
+      "fallacyDetection": true
+    }
+  },
+  "security": {
+    "encryption": {
+      "enabled": true,
+      "algorithm": "AES-256-GCM",
+      "keyDerivation": "scrypt"
+    },
+    "access": {
+      "requireAuth": true,
+      "allowedOrigins": ["https://ahrimagon.ai", "https://mcp.ahrimagon.ai"],
+      "rateLimiting": {
+        "requestsPerMinute": 1000,
+        "burstSize": 100
+      }
+    },
+    "audit": {
+      "enabled": true,
+      "logLevel": "info",
+      "retentionDays": 90
+    }
+  },
+  "tools": {
+    "timeout": 30000,
+    "debug": false,
+    "maxRetries": 3,
+    "resourceLimits": {
+      "maxMemoryMB": 1024,
+      "maxCpuPercent": 25.0
+    }
+  },
+  "environments": {
+    "development": {
+      "tools": {
+        "debug": true,
+        "timeout": 60000
+      },
+      "security": {
+        "access": {
+          "requireAuth": false
+        }
+      }
+    },
+    "testing": {
+      "mindBalance": {
+        "abstainThreshold": 0.50
+      },
+      "tools": {
+        "timeout": 5000,
+        "maxRetries": 1
+      }
+    }
+  },
+  "metadata": {
+    "author": "Ahrimagon Scientific Team",
+    "organization": "Ahrimagon AI Research",
+    "license": "MIT",
+    "tags": ["mcp", "mind-balance", "argumentation", "scientific", "ai"]
+  }
+}

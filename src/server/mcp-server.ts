@@ -16,6 +16,7 @@ import { MCP_ERROR_CODES } from '../types/mcp.js';
 import { MCPTool } from '../core/mcp-command.js';
 import { MindBalanceTool } from '../tools/mind-balance.js';
 import { SteelmanTool, StrawmanTool, StrawmanToSteelmanTool } from '../tools/argumentation.js';
+import { secureConfigManager } from '../config/secure-manager.js';
 
 export interface MCPServerOptions {
   name: string;
@@ -28,7 +29,35 @@ export class MCPServer {
   private initialized = false;
 
   constructor(private options: MCPServerOptions) {
+    this.initializeConfiguration();
     this.registerDefaultTools();
+  }
+
+  /**
+   * Initialize configuration with secure rigor
+   */
+  private async initializeConfiguration(): Promise<void> {
+    try {
+      const result = await secureConfigManager.initialize({
+        configPath: '.ahrimagon.scientific',
+        environment: process.env.NODE_ENV || 'production',
+        verifySignature: false, // Set to true in production with proper key management
+        strictMode: true,
+        auditLogging: true
+      });
+
+      if (!result.success) {
+        throw new Error('Configuration initialization failed');
+      }
+
+      console.log('✅ Secure configuration loaded successfully');
+      console.log(`📊 Validation: ${result.validation.valid ? 'PASSED' : 'FAILED'}`);
+      console.log(`🔒 Security checks: ${result.validation.security.length} performed`);
+      console.log(`⚠️  Warnings: ${result.validation.warnings.length}`);
+      
+    } catch (error) {
+      console.warn('Failed to load secure configuration, using defaults:', error instanceof Error ? error.message : 'Unknown error');
+    }
   }
 
   /**

@@ -14,9 +14,10 @@
  */
 
 import { MCPCommand, MCPTool } from '../core/mcp-command.js';
+import { secureConfigManager } from '../config/secure-manager.js';
 
 // ---- Angel/Demon Model Domain (per White Paper) ----
-export type AdvisoryMode = 'angel' | 'demon' | 'blend';
+export type AdvisoryMode = 'angel' | 'demon' | 'blend' | 'probabilistic';
 
 /**
  * Advisor Weights - Parametric Advisory Model
@@ -53,16 +54,30 @@ export interface MentalContext {
 }
 
 /**
+ * Scoring Configuration - Proper Scoring Rules and Abstention
+ */
+export interface ScoringConfig {
+  /** Scoring rules to apply (brier, log) */
+  rules?: ('brier' | 'log')[];
+  /** Abstention threshold [0,1] - confidence below this triggers abstention */
+  abstainThreshold?: number;
+  /** Score for abstention (null = no score) */
+  abstentionScore?: number | null;
+}
+
+/**
  * Mind Balance Arguments - Weighted Vector Field Input
  * Forms a parametric advisory model where two primary forces influence decision space
  */
 export interface MindBalanceArgs extends AdvisorWeights, PhaseInputs, MentalContext {
-  /** How to combine advisors - angel-only, demon-only, or blended decision. */
+  /** How to combine advisors - angel-only, demon-only, blended, or probabilistic decision. */
   mode: AdvisoryMode;
   /** Clamp Control: Safety clamp for tan() to prevent infinite or runaway values. */
   tanClamp?: number;
   /** Optional normalization across signals for consistent scaling. */
   normalize?: boolean;
+  /** Scoring configuration for probabilistic mode */
+  scoring?: ScoringConfig;
 }
 
 /**
@@ -78,8 +93,16 @@ export interface MindBalanceAdvice {
   demonSignal: number;
   /** Advisory mode used for combination */
   mode: AdvisoryMode;
-  /** Blended decision score after combination and normalization */
-  blendedScore: number;
+  /** Probability of positive decision (for probabilistic mode) */
+  pPositive: number;
+  /** Probability of negative decision (for probabilistic mode) */
+  pNegative: number;
+  /** Decision: positive, negative, or abstain */
+  decision: 'positive' | 'negative' | 'abstain';
+  /** Confidence level (max of pPositive, pNegative) */
+  confidence: number;
+  /** Proper scoring results (brier, log) */
+  scores?: { brier?: number; log?: number };
   /** Explainable rationale string describing the decision process */
   rationale: string;
   /** Complete metadata for reproducibility and analysis */
@@ -135,8 +158,8 @@ export const MindBalanceSchema = {
     },
     mode: { 
       type: 'string', 
-      enum: ['angel', 'demon', 'blend'],
-      description: 'Advisory combination mode - angel-only, demon-only, or blended decision'
+      enum: ['angel', 'demon', 'blend', 'probabilistic'],
+      description: 'Advisory combination mode - angel-only, demon-only, blended, or probabilistic decision'
     },
     tanClamp: {
       type: 'number',
@@ -149,6 +172,29 @@ export const MindBalanceSchema = {
       type: 'boolean',
       default: true,
       description: 'Normalize angel/demon signals before blending for consistent scaling',
+    },
+    scoring: {
+      type: 'object',
+      properties: {
+        rules: { 
+          type: 'array', 
+          items: { type: 'string', enum: ['brier', 'log'] },
+          description: 'Scoring rules to apply (brier, log)'
+        },
+        abstainThreshold: { 
+          type: 'number', 
+          minimum: 0, 
+          maximum: 1, 
+          default: 0.70,
+          description: 'Abstention threshold [0,1] - confidence below this triggers abstention'
+        },
+        abstentionScore: { 
+          type: ['number', 'null'],
+          description: 'Score for abstention (null = no score)'
+        }
+      },
+      additionalProperties: false,
+      description: 'Scoring configuration for probabilistic mode'
     },
   },
   additionalProperties: false,
@@ -164,7 +210,7 @@ export class MindBalanceCommand extends MCPCommand<MindBalanceArgs, MindBalanceA
   static toolDefinition = {
     name: MindBalanceCommand.name,
     description:
-      "Balances 'angel (cosine)' and 'demon (tangent)' advisors to produce a blended decision score and rationale.",
+      "Balances 'angel (cosine)' and 'demon (tangent)' advisors; returns calibrated probabilities with abstention.",
     inputSchema: MindBalanceSchema,
   };
 
@@ -179,7 +225,7 @@ export class MindBalanceCommand extends MCPCommand<MindBalanceArgs, MindBalanceA
 export class MindBalanceTool extends MCPTool<MindBalanceArgs, MindBalanceAdvice> {
   readonly name = 'mind.balance';
   readonly description =
-    "Balances 'angel (cosine)' and 'demon (tangent)' advisors to produce a blended decision score and rationale.";
+    "Balances 'angel (cosine)' and 'demon (tangent)' advisors; returns calibrated probabilities with abstention.";
   readonly inputSchema = MindBalanceSchema;
 
   async execute(args: MindBalanceArgs): Promise<MindBalanceAdvice> {
@@ -191,75 +237,93 @@ export class MindBalanceTool extends MCPTool<MindBalanceArgs, MindBalanceAdvice>
       cosine,
       tangent,
       mode,
-      tanClamp = 3.0,
-      normalize = true,
+      tanClamp,
+      normalize,
+      scoring,
     } = args;
+
+    // Get configuration values with secure precision
+    const mindBalanceConfig = secureConfigManager.getMindBalanceConfig();
+    const finalTanClamp = tanClamp ?? mindBalanceConfig.tanClamp ?? 3.0;
+    const finalNormalize = normalize ?? mindBalanceConfig.normalize ?? true;
+    const finalScoring = scoring ?? mindBalanceConfig.scoring;
 
     // Validate inputs
     this.validateInputs(args);
 
     // Calculate angel signal: cos(theta) * cosine
-    const angelSignal = Math.cos(theta) * cosine;
+    const cosVal = Math.cos(theta) * cosine;
 
     // Calculate demon signal: clamped tan(phi) * tangent
-    const tanPhi = Math.tan(phi);
-    const clampedTanPhi = Math.max(-tanClamp, Math.min(tanClamp, tanPhi));
-    const demonSignal = clampedTanPhi * tangent;
+    const tanVal = this.clampMag(Math.tan(phi), finalTanClamp) * tangent;
 
-    // Normalize signals if requested
-    let normalizedAngel = angelSignal;
-    let normalizedDemon = demonSignal;
-    if (normalize) {
-      const magnitude = Math.sqrt(angelSignal * angelSignal + demonSignal * demonSignal);
-      if (magnitude > 0) {
-        normalizedAngel = angelSignal / magnitude;
-        normalizedDemon = demonSignal / magnitude;
-      }
+    // Calculate raw score with optional normalization
+    const raw = finalNormalize ? this.zBlend(cosVal, tanVal) : (cosVal - tanVal);
+    const pPositive = this.logistic(raw);
+    const pNegative = 1 - pPositive;
+
+    // Determine abstention threshold
+    const defaultT = mindBalanceConfig.abstainThreshold ?? 0.70;
+    const abstainThreshold = (finalScoring as any)?.abstainThreshold ?? (mode === 'probabilistic' ? defaultT : 1.01);
+    const confidence = Math.max(pPositive, pNegative);
+    const abstain = confidence < abstainThreshold;
+
+    // Make decision
+    const decision = abstain ? 'abstain' : (pPositive >= 0.5 ? 'positive' : 'negative');
+
+    // Calculate proper scores if requested
+    const want = finalScoring?.rules ?? ['brier', 'log'];
+    const scores: { brier?: number; log?: number } = {};
+    if (want.includes('brier')) {
+      scores.brier = abstain ? (finalScoring?.abstentionScore ?? 0.0) : 0.0;
     }
-
-    // Calculate blended score based on mode
-    let blendedScore: number;
-    switch (mode) {
-      case 'angel':
-        blendedScore = normalizedAngel;
-        break;
-      case 'demon':
-        blendedScore = normalizedDemon;
-        break;
-      case 'blend':
-      default:
-        blendedScore = (normalizedAngel + normalizedDemon) / 2;
-        break;
+    if (want.includes('log')) {
+      scores.log = abstain ? (finalScoring?.abstentionScore ?? 0.0) : 0.0;
     }
 
     // Generate rationale
     const rationale = this.generateRationale({
       topic,
       tags,
-      angelSignal: normalizedAngel,
-      demonSignal: normalizedDemon,
+      angelSignal: cosVal,
+      demonSignal: tanVal,
       mode,
-      blendedScore,
+      pPositive,
+      pNegative,
+      decision,
+      confidence,
+      abstainThreshold,
       theta,
       phi,
+      tanClamp: finalTanClamp,
+      normalize: finalNormalize,
     });
 
-    return {
+    const result: MindBalanceAdvice = {
       topic,
-      angelSignal: normalizedAngel,
-      demonSignal: normalizedDemon,
+      angelSignal: cosVal,
+      demonSignal: tanVal,
       mode,
-      blendedScore,
+      pPositive,
+      pNegative,
+      decision,
+      confidence,
       rationale,
       metadata: {
         theta,
         phi,
         cosine,
         tangent,
-        tanClamp,
-        normalized: normalize,
+        tanClamp: finalTanClamp,
+        normalized: finalNormalize,
       },
     };
+
+    if (Object.keys(scores).length > 0) {
+      result.scores = scores;
+    }
+
+    return result;
   }
 
   private validateInputs(args: MindBalanceArgs): void {
@@ -277,6 +341,28 @@ export class MindBalanceTool extends MCPTool<MindBalanceArgs, MindBalanceAdvice>
   }
 
   /**
+   * Clamp magnitude to prevent infinite or runaway values
+   */
+  private clampMag(x: number, m: number): number {
+    return Math.sign(x) * Math.min(Math.abs(x), m);
+  }
+
+  /**
+   * Logistic function for probability conversion
+   */
+  private logistic(z: number): number {
+    return 1 / (1 + Math.exp(-z));
+  }
+
+  /**
+   * Z-score blending for normalization
+   */
+  private zBlend(a: number, b: number): number {
+    const μ = (Math.abs(a) + Math.abs(b)) / 2 || 1e-9;
+    return (a - b) / (μ * 2);
+  }
+
+  /**
    * Generate Explainable Rationale - White Paper Conceptual Model
    * Provides detailed explanation of the weighted vector field decision process
    */
@@ -286,11 +372,20 @@ export class MindBalanceTool extends MCPTool<MindBalanceArgs, MindBalanceAdvice>
     angelSignal: number;
     demonSignal: number;
     mode: AdvisoryMode;
-    blendedScore: number;
+    pPositive: number;
+    pNegative: number;
+    decision: 'positive' | 'negative' | 'abstain';
+    confidence: number;
+    abstainThreshold: number;
     theta: number;
     phi: number;
+    tanClamp: number;
+    normalize: boolean;
   }): string {
-    const { topic, tags, angelSignal, demonSignal, mode, blendedScore, theta, phi } = params;
+    const { 
+      topic, tags, angelSignal, demonSignal, mode, pPositive, pNegative, 
+      decision, confidence, abstainThreshold, theta, phi, tanClamp, normalize 
+    } = params;
 
     const angelStrength = Math.abs(angelSignal);
     const demonStrength = Math.abs(demonSignal);
@@ -321,22 +416,39 @@ export class MindBalanceTool extends MCPTool<MindBalanceArgs, MindBalanceAdvice>
       rationale += `The demon advisor is subdued (${demonSignal.toFixed(3)}) - minimal risky or urgent impulses. `;
     }
 
-    // Mode-Specific Decision - Weighted Vector Field Output
-    switch (mode) {
-      case 'angel':
-        rationale += `Angel-only mode prioritizes stable, ethical guidance: ${blendedScore > 0 ? 'Proceed with ethical grounding' : 'Hold for more stable conditions'}.`;
-        break;
-      case 'demon':
-        rationale += `Demon-only mode follows urgent impulses: ${blendedScore > 0 ? 'Act on immediate pressure' : 'Wait despite urgency'}.`;
-        break;
-      case 'blend':
-      default:
-        const decision = Math.abs(blendedScore) > 0.4 
-          ? (blendedScore > 0 ? 'Proceed with balanced guidance' : 'Hold with balanced caution')
-          : 'Consider further - balanced forces create ambivalence';
-        rationale += `Blended decision from weighted vector field: ${decision} (combined score: ${blendedScore.toFixed(3)}).`;
-        break;
+    // Probabilistic Analysis
+    if (mode === 'probabilistic') {
+      rationale += `Probabilistic mode: p(positive)=${pPositive.toFixed(3)}, p(negative)=${pNegative.toFixed(3)}, confidence=${confidence.toFixed(3)}. `;
+      if (decision === 'abstain') {
+        rationale += `Abstaining due to low confidence (${confidence.toFixed(3)} < ${abstainThreshold.toFixed(3)}). `;
+      } else {
+        rationale += `Decision: ${decision} based on probability threshold. `;
+      }
+    } else {
+      // Legacy mode analysis
+      const blendedScore = mode === 'angel' ? angelSignal : 
+                          mode === 'demon' ? demonSignal : 
+                          (angelSignal + demonSignal) / 2;
+      
+      switch (mode) {
+        case 'angel':
+          rationale += `Angel-only mode prioritizes stable, ethical guidance: ${blendedScore > 0 ? 'Proceed with ethical grounding' : 'Hold for more stable conditions'}.`;
+          break;
+        case 'demon':
+          rationale += `Demon-only mode follows urgent impulses: ${blendedScore > 0 ? 'Act on immediate pressure' : 'Wait despite urgency'}.`;
+          break;
+        case 'blend':
+        default:
+          const decision = Math.abs(blendedScore) > 0.4 
+            ? (blendedScore > 0 ? 'Proceed with balanced guidance' : 'Hold with balanced caution')
+            : 'Consider further - balanced forces create ambivalence';
+          rationale += `Blended decision from weighted vector field: ${decision} (combined score: ${blendedScore.toFixed(3)}).`;
+          break;
+      }
     }
+
+    // Technical details
+    rationale += ` Technical: angel=cos(${theta.toFixed(3)})*${angelSignal.toFixed(3)}, demon=clamp(tan(${phi.toFixed(3)}),${tanClamp})*${demonSignal.toFixed(3)}, normalize=${normalize}.`;
 
     // Add Context Tags for Interpretation
     if (tags.length > 0) {

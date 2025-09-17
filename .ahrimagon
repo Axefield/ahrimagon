@@ -1,0 +1,55 @@
+{
+  "server": {
+    "name": "mcp-mind-argumentation",
+    "version": "1.0.0",
+    "description": "MCP Mind Balance & Argumentation Service"
+  },
+  "mindBalance": {
+    "abstainThreshold": 0.70,
+    "tanClamp": 3.0,
+    "normalize": true,
+    "scoring": {
+      "rules": ["brier", "log"],
+      "abstentionScore": 0.0
+    }
+  },
+  "argumentation": {
+    "confidence": {
+      "premiseWeight": 0.5,
+      "objectionWeight": 0.3,
+      "riskPenalty": 0.3
+    },
+    "responses": {
+      "detailedRationale": true,
+      "includeEvidence": true
+    }
+  },
+  "tools": {
+    "timeout": 30000,
+    "debug": false,
+    "maxRetries": 3
+  },
+  "environments": {
+    "development": {
+      "tools": {
+        "debug": true
+      },
+      "mindBalance": {
+        "abstainThreshold": 0.60
+      }
+    },
+    "production": {
+      "tools": {
+        "debug": false
+      }
+    },
+    "testing": {
+      "mindBalance": {
+        "abstainThreshold": 0.50
+      },
+      "tools": {
+        "timeout": 5000
+      }
+    }
+  }
+}
